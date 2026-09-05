@@ -6,7 +6,9 @@ import {
   Sparkles, 
   Code, 
   AlertCircle,
-  FileCode2
+  FileCode2,
+  Play,
+  Zap
 } from 'lucide-react';
 
 export function CodeEditor({ 
@@ -14,7 +16,9 @@ export function CodeEditor({
   setCode, 
   language, 
   errorLine, 
-  onFormatCode 
+  onFormatCode,
+  onRunCompile,
+  isCompiling
 }) {
   const [copied, setCopied] = useState(false);
   const textareaRef = useRef(null);
@@ -139,15 +143,37 @@ export function CodeEditor({
 
       </div>
 
-      {/* Footer Info Strip */}
-      <div className="flex items-center justify-between px-4 py-1.5 bg-slate-950/90 border-t border-slate-800 text-[11px] text-slate-400">
-        <div className="flex items-center gap-3">
+      {/* Action Footer Strip with Prominent Compile & Solve Button */}
+      <div className="flex items-center justify-between px-4 py-2.5 bg-slate-950 border-t border-slate-800 flex-wrap gap-2">
+        <div className="flex items-center gap-3 text-[11px] text-slate-400">
           <span>Lines: <strong className="text-slate-200">{lineCount}</strong></span>
           <span>Chars: <strong className="text-slate-200">{code.length}</strong></span>
+          <span className="hidden sm:inline">Tab: <strong>4 spaces</strong></span>
         </div>
-        <div>
-          <span>Tab: <strong>4 spaces</strong></span>
-        </div>
+
+        {onRunCompile && (
+          <button
+            onClick={onRunCompile}
+            disabled={isCompiling}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-xl transition transform active:scale-95 ${
+              isCompiling
+                ? 'bg-cyan-600/50 text-cyan-200 cursor-wait'
+                : 'bg-gradient-to-r from-cyan-500 via-teal-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-slate-950 shadow-lg shadow-cyan-500/25 ring-2 ring-cyan-500/30'
+            }`}
+          >
+            {isCompiling ? (
+              <>
+                <Zap className="w-4 h-4 animate-spin" />
+                <span>Compiling & Solving...</span>
+              </>
+            ) : (
+              <>
+                <Play className="w-4 h-4 fill-current" />
+                <span>Compile & Solve Bug</span>
+              </>
+            )}
+          </button>
+        )}
       </div>
 
     </div>

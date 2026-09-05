@@ -143,6 +143,8 @@ export default function App() {
               language={selectedLang}
               errorLine={analysisResult?.lineError?.lineNumber}
               onFormatCode={handleFormatCode}
+              onRunCompile={handleRunCompile}
+              isCompiling={isCompiling}
             />
           </div>
 
