@@ -35,17 +35,6 @@ export function TerminalOutput({
         <div className="flex items-center gap-2">
           <TerminalIcon className="w-4 h-4 text-cyan-400" />
           <span className="font-semibold text-slate-300">Console & Terminal Output</span>
-
-          {result && (
-            <span className={`ml-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${
-              result.success 
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
-                : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-            }`}>
-              {result.success ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-              {result.status}
-            </span>
-          )}
         </div>
 
         {/* Tab Buttons */}
