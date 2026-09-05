@@ -364,7 +364,6 @@ function performStaticAnalysis(code, language) {
   }
 
   // Rule 4: Division by Zero Runtime Error Check (C++, Java, Python, C#, JS)
-  // Track zero-initialized variables
   const zeroVars = new Set();
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -374,19 +373,32 @@ function performStaticAnalysis(code, language) {
     }
   }
 
+  const fullCodeText = code.toLowerCase();
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Check explicit division by 0 or division by a variable initialized to 0
     const divMatch = line.match(/\/\s*([a-zA-Z_]\w*|0)\b/);
     if (divMatch) {
       const divisor = divMatch[1];
       if (divisor === '0' || zeroVars.has(divisor)) {
+        
+        // Check if code ALREADY contains a guard condition for this divisor!
+        const hasGuard = fullCodeText.includes(`${divisor} != 0`) || 
+                         fullCodeText.includes(`${divisor} > 0`) || 
+                         fullCodeText.includes(`${divisor} < 0`) || 
+                         fullCodeText.includes(`if (${divisor})`) ||
+                         fullCodeText.includes(`if(${divisor})`);
+
+        if (hasGuard) {
+          // Divisor is safely guarded by an if-statement! Code is valid and error-free!
+          continue;
+        }
+
         const errorTypeName = language === 'python' ? 'ZeroDivisionError' : 'FloatingPointException (SIGFPE)';
         const fixedLines = [...lines];
         
-        // Generate clean non-zero guard check
         const indent = line.match(/^\s*/)[0];
-        const fixedGuard = `${indent}if (${divisor} != 0) {\n${line}\n${indent}} else {\n${indent}    cout << "Error: Division by zero!" << endl;\n${indent}}`;
+        const fixedGuard = `${indent}if (${divisor} != 0) {\n${indent}    ${line.trim()}\n${indent}} else {\n${indent}    cout << "Error: Division by zero!" << endl;\n${indent}}`;
         fixedLines[i] = fixedGuard;
 
         return {
