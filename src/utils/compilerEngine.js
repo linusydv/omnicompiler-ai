@@ -2,19 +2,20 @@ import { PRESET_CODES } from '../data/presetCodes';
 
 /**
  * Main Compiler & Error Diagnostics Analysis Engine
- * Analyzes source code, detects line errors, fixes them, extracts topics, generates alternate solutions & Big-O complexity.
+ * Analyzes source code, detects exact line errors, fixes them, extracts topics, generates alternate solutions & Big-O complexity.
  */
 export function analyzeAndCompileCode(sourceCode, language = 'javascript', userTestInput = '') {
   const startTime = performance.now();
   const trimmedCode = sourceCode.trim();
+  const langLower = language.toLowerCase();
 
-  // 1. Check if input matches one of our preset buggy examples closely
+  // 1. Check if input matches one of our preset buggy examples strictly
   const matchedPreset = PRESET_CODES.find(p => 
-    p.language.toLowerCase() === language.toLowerCase() && 
+    p.language.toLowerCase() === langLower && 
     isCodeSimilar(p.buggyCode, trimmedCode)
   );
 
-  if (matchedPreset && isCodeSimilar(matchedPreset.buggyCode, trimmedCode)) {
+  if (matchedPreset) {
     const endTime = performance.now();
     return {
       success: false,
@@ -30,13 +31,13 @@ export function analyzeAndCompileCode(sourceCode, language = 'javascript', userT
       topics: matchedPreset.topics,
       alternateSolution: matchedPreset.alternateSolution,
       complexity: matchedPreset.complexity,
-      diff: generateCodeDiff(trimmedCode, matchedPreset.fixedCode),
+      diff: generateCodeDiff(sourceCode, matchedPreset.fixedCode),
       executionSteps: matchedPreset.executionSteps
     };
   }
 
-  // 2. Perform Dynamic Live Parsing & Heuristic Static Analysis
-  const lineByLineAnalysis = performStaticAnalysis(sourceCode, language);
+  // 2. Perform Dynamic Live Parsing & Precise Static Analysis
+  const lineByLineAnalysis = performStaticAnalysis(sourceCode, langLower);
   
   if (lineByLineAnalysis.hasError) {
     const endTime = performance.now();
@@ -65,7 +66,7 @@ export function analyzeAndCompileCode(sourceCode, language = 'javascript', userT
   }
 
   // 3. Live Browser JavaScript Execution Sandbox (if language is JavaScript)
-  if (language.toLowerCase() === 'javascript') {
+  if (langLower === 'javascript') {
     const liveJsResult = executeLiveJavaScript(sourceCode, userTestInput);
     if (!liveJsResult.success) {
       const endTime = performance.now();
@@ -116,7 +117,7 @@ export function analyzeAndCompileCode(sourceCode, language = 'javascript', userT
     executionTimeMs: Math.round(endTime - startTime + 14),
     memoryKB: 4100,
     exitCode: 0,
-    stdout: `[Compilation Successful]\nOutput:\nProgram finished execution with return code 0.`,
+    stdout: `[Compilation Successful]\nProgram finished execution with return code 0.`,
     stderr: '',
     lineError: null,
     fixedCode: sourceCode,
@@ -129,10 +130,21 @@ export function analyzeAndCompileCode(sourceCode, language = 'javascript', userT
   };
 }
 
-/** Helper: Check if code snippet matches standard preset pattern */
-function isCodeSimilar(str1, str2) {
-  const normalize = (s) => s.replace(/\s+/g, '').replace(/#.*/g, '').replace(/\/\/.*/g, '');
-  return normalize(str1).includes(normalize(str2).slice(0, 40)) || normalize(str2).includes(normalize(str1).slice(0, 40));
+/** Helper: Strict preset similarity check to avoid false positives */
+function isCodeSimilar(presetCode, userCode) {
+  const normalize = (s) => s.replace(/\s+/g, '').toLowerCase();
+  const normPreset = normalize(presetCode);
+  const normUser = normalize(userCode);
+
+  if (normPreset === normUser) return true;
+  if (normUser.length < 15 || normPreset.length < 15) return false;
+
+  // Must match at least 85% of characters to trigger preset match
+  const minLen = Math.min(normPreset.length, normUser.length);
+  const maxLen = Math.max(normPreset.length, normUser.length);
+  if (minLen / maxLen < 0.8) return false;
+
+  return normPreset.includes(normUser.slice(0, Math.floor(minLen * 0.8)));
 }
 
 /** Live JavaScript Sandbox Evaluator */
@@ -145,7 +157,6 @@ function executeLiveJavaScript(code, testInput) {
   };
 
   try {
-    // Create safe evaluation scope
     const sandboxFunc = new Function('console', 'input', `
       "use strict";
       ${code}
@@ -157,7 +168,6 @@ function executeLiveJavaScript(code, testInput) {
       stderr: ''
     };
   } catch (err) {
-    // Extract line number from stack trace if available
     let lineNum = 1;
     if (err.stack) {
       const match = err.stack.match(/<anonymous>:(\d+):(\d+)/);
@@ -168,7 +178,6 @@ function executeLiveJavaScript(code, testInput) {
     const codeLines = code.split('\n');
     const problemLine = codeLines[lineNum - 1] || codeLines[0] || '';
 
-    // Generate quick fix
     let fixCode = code;
     let explanation = `Fixed runtime issue on line ${lineNum}: ${err.message}`;
     if (err.name === 'ReferenceError') {
@@ -198,11 +207,87 @@ function executeLiveJavaScript(code, testInput) {
   }
 }
 
-/** Static Analysis Engine for multi-language AST/pattern checks */
+/** Precise Multi-Language Static Analysis Engine */
 function performStaticAnalysis(code, language) {
   const lines = code.split('\n');
-  
-  // Rule 1: Bracket & Parentheses Matching
+
+  // Rule 1: C/C++ Header `#include` missing `#` check
+  if (['cpp', 'c'].includes(language)) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (/^include\s*[<"]/.test(line)) {
+        const fixedLines = [...lines];
+        fixedLines[i] = '#' + lines[i];
+        return {
+          hasError: true,
+          lineNumber: i + 1,
+          errorType: 'SyntaxError',
+          message: "invalid preprocessing directive; expected '#' before include",
+          explanation: `Line ${i + 1} uses \`${line}\`. In C/C++, header file inclusion directives must begin with a hash symbol '#', e.g. \`#include <iostream>\`.`,
+          fixedCode: fixedLines.join('\n'),
+          fixExplanation: `Added missing '#' before 'include' on line ${i + 1}.`,
+          topics: extractTopicsFromCode(code, language),
+          alternateSolution: generateAlternateSolution(code, language),
+          complexity: estimateComplexity(code),
+          executionSteps: generateExecutionSteps(code)
+        };
+      }
+    }
+  }
+
+  // Rule 2: C-Family Semicolon `;` Verification (C++, Java, C#, C)
+  if (['cpp', 'java', 'csharp', 'c'].includes(language)) {
+    for (let i = 0; i < lines.length; i++) {
+      const rawLine = lines[i];
+      const line = rawLine.trim();
+
+      if (
+        line.length > 0 &&
+        !line.startsWith('//') &&
+        !line.startsWith('/*') &&
+        !line.startsWith('*') &&
+        !line.startsWith('#') &&
+        !line.endsWith(';') &&
+        !line.endsWith('{') &&
+        !line.endsWith('}') &&
+        !line.endsWith(':') &&
+        !line.startsWith('using') &&
+        !line.startsWith('package') &&
+        !line.startsWith('import') &&
+        !line.startsWith('namespace') &&
+        !line.includes('if (') &&
+        !line.includes('for (') &&
+        !line.includes('while (')
+      ) {
+        // Expressions like cout << ..., return 0, int x = 5, etc.
+        if (
+          /cout\s*<</.test(line) ||
+          /cin\s*>>/.test(line) ||
+          /return\b/.test(line) ||
+          /System\.out\.print/.test(line) ||
+          /^[a-zA-Z0-9_\s\+\-\*\/\=\(\)\[\]"\'.]+$/.test(line)
+        ) {
+          const fixedLines = [...lines];
+          fixedLines[i] = rawLine + ';';
+          return {
+            hasError: true,
+            lineNumber: i + 1,
+            errorType: 'CompilerError (C1004)',
+            message: "expected ';' at end of statement",
+            explanation: `Line ${i + 1} has statement \`${line}\` which is missing a terminating semicolon ';'. C-family languages require every statement to end with ';'.`,
+            fixedCode: fixedLines.join('\n'),
+            fixExplanation: `Appended missing semicolon ';' to the end of line ${i + 1}.`,
+            topics: extractTopicsFromCode(code, language),
+            alternateSolution: generateAlternateSolution(code, language),
+            complexity: estimateComplexity(code),
+            executionSteps: generateExecutionSteps(code)
+          };
+        }
+      }
+    }
+  }
+
+  // Rule 3: Bracket & Parentheses Matching Across All Languages
   const stack = [];
   const matches = { ')': '(', '}': '{', ']': '[' };
   for (let i = 0; i < lines.length; i++) {
@@ -252,7 +337,7 @@ function performStaticAnalysis(code, language) {
     };
   }
 
-  // Rule 2: Python specific checks (Indentation / Missing Colon / Off-by-one)
+  // Rule 4: Python Specific Checks
   if (language === 'python') {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -264,7 +349,7 @@ function performStaticAnalysis(code, language) {
           lineNumber: i + 1,
           errorType: 'SyntaxError',
           message: `expected ':' at end of ${line.trim().split(' ')[0]} statement`,
-          explanation: `In Python, block headers like \`${line.trim()}\` must end with a colon ':'.`,
+          explanation: `In Python, block headers like \`${line.trim()}\` on line ${i + 1} must end with a colon ':'.`,
           fixedCode: fixedLines.join('\n'),
           fixExplanation: `Appended missing colon \`:\` to the end of statement on line ${i + 1}.`,
           topics: extractTopicsFromCode(code, language),
@@ -293,32 +378,6 @@ function performStaticAnalysis(code, language) {
     }
   }
 
-  // Rule 3: C++ / Java / C# semicolon & null pointer check
-  if (['cpp', 'java', 'csharp', 'c'].includes(language)) {
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line.length > 0 && !line.startsWith('//') && !line.startsWith('#') && !line.endsWith(';') && !line.endsWith('{') && !line.endsWith('}') && !line.startsWith('using') && !line.startsWith('package') && !line.startsWith('import')) {
-        if (/^[a-zA-Z0-9_\s\+\-\*\/\=]+$/.test(line) && !line.includes('if') && !line.includes('for') && !line.includes('while')) {
-          const fixedLines = [...lines];
-          fixedLines[i] = fixedLines[i] + ';';
-          return {
-            hasError: true,
-            lineNumber: i + 1,
-            errorType: 'CompilerError (C1004)',
-            message: `missing ';' at end of statement`,
-            explanation: `C-family languages require every expression statement on line ${i + 1} to terminate with a semicolon ';'.`,
-            fixedCode: fixedLines.join('\n'),
-            fixExplanation: `Added missing semicolon \`;\` to end of line ${i + 1}.`,
-            topics: extractTopicsFromCode(code, language),
-            alternateSolution: generateAlternateSolution(code, language),
-            complexity: estimateComplexity(code),
-            executionSteps: generateExecutionSteps(code)
-          };
-        }
-      }
-    }
-  }
-
   return { hasError: false };
 }
 
@@ -341,39 +400,32 @@ export function extractTopicsFromCode(code, language) {
       explanation: 'Repeatedly executes code blocks over collections or conditional bounds.'
     });
   }
-  if (lower.includes('def ') || lower.includes('function') || lower.includes('public static')) {
+  if (lower.includes('def ') || lower.includes('function') || lower.includes('main') || lower.includes('public static')) {
     topics.push({
-      name: 'Functions & Modularization',
+      name: 'Functions & Entry Points',
       category: 'Program Structure',
-      explanation: 'Encapsulating re-usable logic into callable procedures with parameters.'
+      explanation: 'Encapsulating procedures into callable blocks with parameters and execution entry points.'
     });
   }
-  if (lower.includes('range(') || lower.includes('[]') || lower.includes('array') || lower.includes('list')) {
+  if (lower.includes('range(') || lower.includes('[]') || lower.includes('array') || lower.includes('vector') || lower.includes('list')) {
     topics.push({
-      name: 'Arrays & Indexing',
+      name: 'Arrays & Data Collections',
       category: 'Data Structures',
       explanation: 'Sequential data containers accessed via numerical index offsets.'
     });
   }
   if (lower.includes('async') || lower.includes('await') || lower.includes('promise')) {
     topics.push({
-      name: 'Asynchronous Programming',
+      name: 'Asynchronous Operations',
       category: 'Concurrency',
-      explanation: 'Handling non-blocking operations and background I/O tasks.'
+      explanation: 'Handling non-blocking operations and background asynchronous tasks.'
     });
   }
-  if (lower.includes('pointer') || lower.includes('*') || lower.includes('nullptr') || lower.includes('null')) {
+  if (lower.includes('pointer') || lower.includes('*') || lower.includes('nullptr') || lower.includes('cout') || lower.includes('iostream')) {
     topics.push({
-      name: 'Memory & Pointer Safety',
+      name: 'I/O Streams & Memory',
       category: 'System Programming',
-      explanation: 'Direct memory addresses and reference validity verification.'
-    });
-  }
-  if (lower.includes('select') || lower.includes('from') || lower.includes('group by')) {
-    topics.push({
-      name: 'SQL Relational Queries',
-      category: 'Database Architecture',
-      explanation: 'Structured query language declarative filters and aggregation sets.'
+      explanation: 'Standard input/output streams, memory addresses, and data buffer management.'
     });
   }
   if (topics.length === 0) {
@@ -424,19 +476,19 @@ export function generateAlternateSolution(code, language) {
 
   return {
     title: "Functional & Idiomatic Declarative Style",
-    description: "Replaces imperative mutable state with immutable functional transformations.",
+    description: "Replaces imperative mutable state with clean modular transformations.",
     code: language === 'javascript' ?
 `const processData = (arr) => arr
     .filter(x => x > 0)
     .map(x => x * 2)
     .reduce((sum, x) => sum + x, 0);` :
-`# Python List Comprehension Approach
+`# Python Approach
 def process_data(arr):
     return sum(x * 2 for x in arr if x > 0)`,
     timeComplexity: "O(N)",
     spaceComplexity: "O(1)",
     pros: ["Cleaner, self-documenting code.", "Prevents side-effect bugs.", "Easier to test in isolation."],
-    cons: ["Slight heap overhead for intermediate pipeline objects."]
+    cons: ["Slight memory overhead for intermediate pipeline objects."]
   };
 }
 
