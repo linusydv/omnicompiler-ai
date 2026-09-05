@@ -112,15 +112,17 @@ export function analyzeAndCompileCode(sourceCode, language = 'javascript', userT
     }
   }
 
-  // 4. Clean Execution Fallback for clean non-JS code
+  // 4. Clean Execution & Program Output Simulator for Non-JS languages
   const endTime = performance.now();
+  const simulatedOutput = simulateProgramOutput(sourceCode, langLower);
+
   return {
     success: true,
     status: 'Success (Exit Code 0)',
     executionTimeMs: Math.round(endTime - startTime + 14),
     memoryKB: 4100,
     exitCode: 0,
-    stdout: `[Compilation Successful]\nProgram finished execution with return code 0.`,
+    stdout: simulatedOutput,
     stderr: '',
     lineError: null,
     fixedCode: sourceCode,
@@ -151,7 +153,8 @@ function determineErrorStatus(errorType) {
     lower.includes('zerodivision') || 
     lower.includes('arithmetic') ||
     lower.includes('nullpointer') ||
-    lower.includes('out_of_range')
+    lower.includes('out_of_range') ||
+    lower.includes('undefinedbehavior')
   ) {
     return 'Runtime Error';
   }
@@ -268,7 +271,6 @@ function performStaticAnalysis(code, language) {
   if (['cpp', 'java', 'csharp', 'c'].includes(language)) {
     for (let i = 0; i < lines.length; i++) {
       const rawLine = lines[i];
-      // Strip single-line and multi-line comments before checking line termination
       const lineNoComment = rawLine.replace(/\/\/.*$/, '').replace(/\/\*.*?\*\//g, '').trim();
 
       if (
@@ -364,33 +366,26 @@ function performStaticAnalysis(code, language) {
     };
   }
 
-  // Rule 4: Division by Zero Runtime Error Check with Block-Scope Guard Tracking
-  // Track zero-initialized variables (excluding comparison operators like != 0)
+  // Rule 4: Division by Zero Runtime Error Check
   const zeroVars = new Set();
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Match assignments like `divisor = 0` but NOT comparisons like `divisor != 0`
     const zeroMatch = line.match(/(?:int|float|double|let|var|const)?\s*([a-zA-Z_]\w*)\s*=(?!=)\s*0(?:\.0+)?;?/);
     if (zeroMatch && !line.includes('!=') && !line.includes('==')) {
       zeroVars.add(zeroMatch[1]);
     }
   }
 
-  // Track active guarded variables line-by-line
   const guardedVarsAtLine = new Array(lines.length).fill(null).map(() => new Set());
   let currentActiveGuards = new Set();
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Check if line opens a non-zero guard check like `if (divisor != 0)`
     const guardMatch = line.match(/if\s*\(\s*([a-zA-Z_]\w*)\s*(?:!=|>|<)\s*0\s*\)/);
     if (guardMatch) {
       currentActiveGuards.add(guardMatch[1]);
     }
-    // Record active guards for line i
     guardedVarsAtLine[i] = new Set(currentActiveGuards);
-
-    // Reset guards when closing brace of if-statement is reached
     if (line.includes('}') && currentActiveGuards.size > 0) {
       currentActiveGuards.clear();
     }
@@ -402,10 +397,7 @@ function performStaticAnalysis(code, language) {
     if (divMatch) {
       const divisor = divMatch[1];
       if (divisor === '0' || zeroVars.has(divisor)) {
-        
-        // Check if divisor is guarded by an active `if (divisor != 0)` block on line i!
         if (guardedVarsAtLine[i].has(divisor)) {
-          // Divisor is safely guarded by an if-statement! Code is valid and error-free!
           continue;
         }
 
@@ -433,7 +425,57 @@ function performStaticAnalysis(code, language) {
     }
   }
 
-  // Rule 5: Python Specific Checks
+  // Rule 5: Array Size & Out-of-Bounds Index Access Analyzer
+  const arrayDeclarations = new Map(); // arrayName -> { size, values: [], lineNum }
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Match `int numbers[3] = {10, 20, 30};` or `int arr[5];`
+    const arrDeclMatch = line.match(/(?:int|float|double|char|string|auto)?\s*([a-zA-Z_]\w*)\s*\[\s*(\d+)\s*\](?:\s*=\s*\{([^}]+)\})?/);
+    if (arrDeclMatch) {
+      const arrName = arrDeclMatch[1];
+      const size = parseInt(arrDeclMatch[2], 10);
+      const valListStr = arrDeclMatch[3] || '';
+      const values = valListStr ? valListStr.split(',').map(v => v.trim()) : [];
+      arrayDeclarations.set(arrName, { size, values, lineNum: i + 1 });
+    }
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Match index access like `numbers[10]` or `arr[5]`
+    const indexMatches = line.matchAll(/([a-zA-Z_]\w*)\s*\[\s*(\d+)\s*\]/g);
+    for (const match of indexMatches) {
+      const arrName = match[1];
+      const requestedIndex = parseInt(match[2], 10);
+
+      // Verify if arrName was declared with a fixed size
+      if (arrayDeclarations.has(arrName)) {
+        const { size, values } = arrayDeclarations.get(arrName);
+        if (requestedIndex >= size) {
+          const maxValidIndex = Math.max(0, size - 1);
+          const fixedLines = [...lines];
+          fixedLines[i] = fixedLines[i].replace(`${arrName}[${requestedIndex}]`, `${arrName}[${maxValidIndex}]`);
+
+          return {
+            hasError: true,
+            lineNumber: i + 1,
+            errorType: 'IndexError (std::out_of_range)',
+            message: `array index ${requestedIndex} out of bounds for array '${arrName}' of size ${size}`,
+            explanation: `Line ${i + 1} accesses \`${arrName}[${requestedIndex}]\`, but array \`${arrName}\` was declared with size ${size} (valid 0-based indices are 0 to ${maxValidIndex}). Accessing index ${requestedIndex} causes Undefined Behavior, reading garbage memory or triggering a segmentation fault.`,
+            fixedCode: fixedLines.join('\n'),
+            fixExplanation: `Changed out-of-bounds index \`${arrName}[${requestedIndex}]\` to valid boundary index \`${arrName}[${maxValidIndex}]\` (value: ${values[maxValidIndex] || '0'}) on line ${i + 1}.`,
+            topics: extractTopicsFromCode(code, language),
+            alternateSolution: generateAlternateSolution(code, language),
+            complexity: estimateComplexity(code),
+            executionSteps: generateExecutionSteps(code)
+          };
+        }
+      }
+    }
+  }
+
+  // Rule 6: Python Specific Checks
   if (language === 'python') {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -475,6 +517,75 @@ function performStaticAnalysis(code, language) {
   }
 
   return { hasError: false };
+}
+
+/** Helper: Generate realistic Program Execution Output (stdout) */
+function simulateProgramOutput(code, language) {
+  const lines = code.split('\n');
+  const outputs = [];
+
+  // Track array declarations & values
+  const arrayValues = new Map(); // arrName -> array of string values
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const arrMatch = line.match(/(?:int|float|double|char|string|auto)?\s*([a-zA-Z_]\w*)\s*\[\s*\d*\s*\]\s*=\s*\{([^}]+)\}/);
+    if (arrMatch) {
+      const name = arrMatch[1];
+      const vals = arrMatch[2].split(',').map(v => v.trim());
+      arrayValues.set(name, vals);
+    }
+  }
+
+  // Scan cout / print / System.out.println lines
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Match C++ `cout << ... << endl` or `cout << ...;`
+    if (/cout\s*<</.test(line)) {
+      // Check if line prints array index e.g. `cout << numbers[2]`
+      const arrIdxMatch = line.match(/cout\s*<<\s*([a-zA-Z_]\w*)\[(\d+)\]/);
+      if (arrIdxMatch) {
+        const arrName = arrIdxMatch[1];
+        const idx = parseInt(arrIdxMatch[2], 10);
+        if (arrayValues.has(arrName)) {
+          const vals = arrayValues.get(arrName);
+          if (idx < vals.length) {
+            outputs.push(vals[idx]);
+            continue;
+          } else {
+            outputs.push(`32767  (Garbage memory value at out-of-bounds index ${idx})`);
+            continue;
+          }
+        }
+      }
+
+      // Match string literals e.g. `cout << "Hello, World!"`
+      const strMatch = line.match(/cout\s*<<\s*"([^"]+)"/);
+      if (strMatch) {
+        outputs.push(strMatch[1]);
+        continue;
+      }
+
+      // Match variables or math expressions
+      const exprMatch = line.match(/cout\s*<<\s*([^<;]+)/);
+      if (exprMatch && !exprMatch[1].includes('"')) {
+        outputs.push(exprMatch[1].trim());
+        continue;
+      }
+    }
+
+    // Match Python / JS print statements
+    const printMatch = line.match(/print\s*\(\s*"([^"]+)"\s*\)/);
+    if (printMatch) {
+      outputs.push(printMatch[1]);
+    }
+  }
+
+  if (outputs.length > 0) {
+    return outputs.join('\n') + '\n\n[Program finished execution with return code 0]';
+  }
+
+  return `[Program finished execution with return code 0]`;
 }
 
 /** Helper: Fix missing bracket */
