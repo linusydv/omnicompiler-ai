@@ -236,7 +236,7 @@ function executeLiveJavaScript(code, testInput) {
   }
 }
 
-/** Precise Multi-Language Static Analysis Engine */
+/** Precise Multi-Language Static Analysis Engine with Scope Tracking */
 function performStaticAnalysis(code, language) {
   const lines = code.split('\n');
 
@@ -283,6 +283,7 @@ function performStaticAnalysis(code, language) {
         !lineNoComment.startsWith('import') &&
         !lineNoComment.startsWith('namespace') &&
         !lineNoComment.includes('if (') &&
+        !lineNoComment.includes('if(') &&
         !lineNoComment.includes('for (') &&
         !lineNoComment.includes('while (')
       ) {
@@ -363,17 +364,37 @@ function performStaticAnalysis(code, language) {
     };
   }
 
-  // Rule 4: Division by Zero Runtime Error Check (C++, Java, Python, C#, JS)
+  // Rule 4: Division by Zero Runtime Error Check with Block-Scope Guard Tracking
+  // Track zero-initialized variables (excluding comparison operators like != 0)
   const zeroVars = new Set();
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const zeroMatch = line.match(/(?:int|float|double|let|var|const)?\s*([a-zA-Z_]\w*)\s*=\s*0(?:\.0+)?;?/);
-    if (zeroMatch) {
+    // Match assignments like `divisor = 0` but NOT comparisons like `divisor != 0`
+    const zeroMatch = line.match(/(?:int|float|double|let|var|const)?\s*([a-zA-Z_]\w*)\s*=(?!=)\s*0(?:\.0+)?;?/);
+    if (zeroMatch && !line.includes('!=') && !line.includes('==')) {
       zeroVars.add(zeroMatch[1]);
     }
   }
 
-  const fullCodeText = code.toLowerCase();
+  // Track active guarded variables line-by-line
+  const guardedVarsAtLine = new Array(lines.length).fill(null).map(() => new Set());
+  let currentActiveGuards = new Set();
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Check if line opens a non-zero guard check like `if (divisor != 0)`
+    const guardMatch = line.match(/if\s*\(\s*([a-zA-Z_]\w*)\s*(?:!=|>|<)\s*0\s*\)/);
+    if (guardMatch) {
+      currentActiveGuards.add(guardMatch[1]);
+    }
+    // Record active guards for line i
+    guardedVarsAtLine[i] = new Set(currentActiveGuards);
+
+    // Reset guards when closing brace of if-statement is reached
+    if (line.includes('}') && currentActiveGuards.size > 0) {
+      currentActiveGuards.clear();
+    }
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -382,14 +403,8 @@ function performStaticAnalysis(code, language) {
       const divisor = divMatch[1];
       if (divisor === '0' || zeroVars.has(divisor)) {
         
-        // Check if code ALREADY contains a guard condition for this divisor!
-        const hasGuard = fullCodeText.includes(`${divisor} != 0`) || 
-                         fullCodeText.includes(`${divisor} > 0`) || 
-                         fullCodeText.includes(`${divisor} < 0`) || 
-                         fullCodeText.includes(`if (${divisor})`) ||
-                         fullCodeText.includes(`if(${divisor})`);
-
-        if (hasGuard) {
+        // Check if divisor is guarded by an active `if (divisor != 0)` block on line i!
+        if (guardedVarsAtLine[i].has(divisor)) {
           // Divisor is safely guarded by an if-statement! Code is valid and error-free!
           continue;
         }
