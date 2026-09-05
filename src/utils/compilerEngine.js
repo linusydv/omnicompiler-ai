@@ -17,9 +17,10 @@ export function analyzeAndCompileCode(sourceCode, language = 'javascript', userT
 
   if (matchedPreset) {
     const endTime = performance.now();
+    const statusType = determineErrorStatus(matchedPreset.lineError.errorType);
     return {
       success: false,
-      status: 'Compilation / Runtime Error',
+      status: statusType,
       executionTimeMs: Math.round((endTime - startTime) + 18),
       memoryKB: 4120,
       exitCode: 1,
@@ -41,9 +42,10 @@ export function analyzeAndCompileCode(sourceCode, language = 'javascript', userT
   
   if (lineByLineAnalysis.hasError) {
     const endTime = performance.now();
+    const statusType = determineErrorStatus(lineByLineAnalysis.errorType);
     return {
       success: false,
-      status: lineByLineAnalysis.errorType.includes('Syntax') ? 'Compilation Error' : 'Runtime Error',
+      status: statusType,
       executionTimeMs: Math.round(endTime - startTime + 12),
       memoryKB: 3840,
       exitCode: 1,
@@ -70,9 +72,10 @@ export function analyzeAndCompileCode(sourceCode, language = 'javascript', userT
     const liveJsResult = executeLiveJavaScript(sourceCode, userTestInput);
     if (!liveJsResult.success) {
       const endTime = performance.now();
+      const statusType = determineErrorStatus(liveJsResult.lineError.errorType);
       return {
         success: false,
-        status: 'Runtime Error',
+        status: statusType,
         executionTimeMs: Math.round(endTime - startTime + 15),
         memoryKB: 4890,
         exitCode: 1,
@@ -130,6 +133,27 @@ export function analyzeAndCompileCode(sourceCode, language = 'javascript', userT
   };
 }
 
+/** Helper: Accurately classify Compilation Error vs Runtime Error */
+function determineErrorStatus(errorType) {
+  if (!errorType) return 'Compilation Error';
+  const lower = errorType.toLowerCase();
+
+  // Compilation & Syntax Error categories
+  if (
+    lower.includes('syntax') || 
+    lower.includes('compiler') || 
+    lower.includes('build') || 
+    lower.includes('delimiter') || 
+    lower.includes('parse') ||
+    lower.includes('sql syntax')
+  ) {
+    return 'Compilation Error';
+  }
+
+  // Runtime Error categories (IndexError, TypeError, ReferenceError, SegFault, StackOverflow)
+  return 'Runtime Error';
+}
+
 /** Helper: Strict preset similarity check to avoid false positives */
 function isCodeSimilar(presetCode, userCode) {
   const normalize = (s) => s.replace(/\s+/g, '').toLowerCase();
@@ -139,7 +163,6 @@ function isCodeSimilar(presetCode, userCode) {
   if (normPreset === normUser) return true;
   if (normUser.length < 15 || normPreset.length < 15) return false;
 
-  // Must match at least 85% of characters to trigger preset match
   const minLen = Math.min(normPreset.length, normUser.length);
   const maxLen = Math.max(normPreset.length, normUser.length);
   if (minLen / maxLen < 0.8) return false;
@@ -259,7 +282,6 @@ function performStaticAnalysis(code, language) {
         !line.includes('for (') &&
         !line.includes('while (')
       ) {
-        // Expressions like cout << ..., return 0, int x = 5, etc.
         if (
           /cout\s*<</.test(line) ||
           /cin\s*>>/.test(line) ||
