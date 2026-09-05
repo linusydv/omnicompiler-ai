@@ -138,20 +138,26 @@ function determineErrorStatus(errorType) {
   if (!errorType) return 'Compilation Error';
   const lower = errorType.toLowerCase();
 
-  // Compilation & Syntax Error categories
+  // Runtime Error categories
   if (
-    lower.includes('syntax') || 
-    lower.includes('compiler') || 
-    lower.includes('build') || 
-    lower.includes('delimiter') || 
-    lower.includes('parse') ||
-    lower.includes('sql syntax')
+    lower.includes('floatingpoint') || 
+    lower.includes('sigfpe') || 
+    lower.includes('indexerror') || 
+    lower.includes('typeerror') || 
+    lower.includes('referenceerror') || 
+    lower.includes('segmentation') || 
+    lower.includes('sigsegv') || 
+    lower.includes('stackoverflow') || 
+    lower.includes('zerodivision') || 
+    lower.includes('arithmetic') ||
+    lower.includes('nullpointer') ||
+    lower.includes('out_of_range')
   ) {
-    return 'Compilation Error';
+    return 'Runtime Error';
   }
 
-  // Runtime Error categories (IndexError, TypeError, ReferenceError, SegFault, StackOverflow)
-  return 'Runtime Error';
+  // Compilation & Syntax Error categories
+  return 'Compilation Error';
 }
 
 /** Helper: Strict preset similarity check to avoid false positives */
@@ -165,9 +171,9 @@ function isCodeSimilar(presetCode, userCode) {
 
   const minLen = Math.min(normPreset.length, normUser.length);
   const maxLen = Math.max(normPreset.length, normUser.length);
-  if (minLen / maxLen < 0.8) return false;
+  if (minLen / maxLen < 0.85) return false;
 
-  return normPreset.includes(normUser.slice(0, Math.floor(minLen * 0.8)));
+  return normPreset.includes(normUser.slice(0, Math.floor(minLen * 0.85)));
 }
 
 /** Live JavaScript Sandbox Evaluator */
@@ -262,32 +268,30 @@ function performStaticAnalysis(code, language) {
   if (['cpp', 'java', 'csharp', 'c'].includes(language)) {
     for (let i = 0; i < lines.length; i++) {
       const rawLine = lines[i];
-      const line = rawLine.trim();
+      // Strip single-line and multi-line comments before checking line termination
+      const lineNoComment = rawLine.replace(/\/\/.*$/, '').replace(/\/\*.*?\*\//g, '').trim();
 
       if (
-        line.length > 0 &&
-        !line.startsWith('//') &&
-        !line.startsWith('/*') &&
-        !line.startsWith('*') &&
-        !line.startsWith('#') &&
-        !line.endsWith(';') &&
-        !line.endsWith('{') &&
-        !line.endsWith('}') &&
-        !line.endsWith(':') &&
-        !line.startsWith('using') &&
-        !line.startsWith('package') &&
-        !line.startsWith('import') &&
-        !line.startsWith('namespace') &&
-        !line.includes('if (') &&
-        !line.includes('for (') &&
-        !line.includes('while (')
+        lineNoComment.length > 0 &&
+        !lineNoComment.startsWith('#') &&
+        !lineNoComment.endsWith(';') &&
+        !lineNoComment.endsWith('{') &&
+        !lineNoComment.endsWith('}') &&
+        !lineNoComment.endsWith(':') &&
+        !lineNoComment.startsWith('using') &&
+        !lineNoComment.startsWith('package') &&
+        !lineNoComment.startsWith('import') &&
+        !lineNoComment.startsWith('namespace') &&
+        !lineNoComment.includes('if (') &&
+        !lineNoComment.includes('for (') &&
+        !lineNoComment.includes('while (')
       ) {
         if (
-          /cout\s*<</.test(line) ||
-          /cin\s*>>/.test(line) ||
-          /return\b/.test(line) ||
-          /System\.out\.print/.test(line) ||
-          /^[a-zA-Z0-9_\s\+\-\*\/\=\(\)\[\]"\'.]+$/.test(line)
+          /cout\s*<</.test(lineNoComment) ||
+          /cin\s*>>/.test(lineNoComment) ||
+          /return\b/.test(lineNoComment) ||
+          /System\.out\.print/.test(lineNoComment) ||
+          /^[a-zA-Z0-9_\s\+\-\*\/\=\(\)\[\]"\'.]+$/.test(lineNoComment)
         ) {
           const fixedLines = [...lines];
           fixedLines[i] = rawLine + ';';
@@ -296,7 +300,7 @@ function performStaticAnalysis(code, language) {
             lineNumber: i + 1,
             errorType: 'CompilerError (C1004)',
             message: "expected ';' at end of statement",
-            explanation: `Line ${i + 1} has statement \`${line}\` which is missing a terminating semicolon ';'. C-family languages require every statement to end with ';'.`,
+            explanation: `Line ${i + 1} has statement \`${lineNoComment}\` which is missing a terminating semicolon ';'. C-family languages require every statement to end with ';'.`,
             fixedCode: fixedLines.join('\n'),
             fixExplanation: `Appended missing semicolon ';' to the end of line ${i + 1}.`,
             topics: extractTopicsFromCode(code, language),
@@ -359,7 +363,50 @@ function performStaticAnalysis(code, language) {
     };
   }
 
-  // Rule 4: Python Specific Checks
+  // Rule 4: Division by Zero Runtime Error Check (C++, Java, Python, C#, JS)
+  // Track zero-initialized variables
+  const zeroVars = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const zeroMatch = line.match(/(?:int|float|double|let|var|const)?\s*([a-zA-Z_]\w*)\s*=\s*0(?:\.0+)?;?/);
+    if (zeroMatch) {
+      zeroVars.add(zeroMatch[1]);
+    }
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Check explicit division by 0 or division by a variable initialized to 0
+    const divMatch = line.match(/\/\s*([a-zA-Z_]\w*|0)\b/);
+    if (divMatch) {
+      const divisor = divMatch[1];
+      if (divisor === '0' || zeroVars.has(divisor)) {
+        const errorTypeName = language === 'python' ? 'ZeroDivisionError' : 'FloatingPointException (SIGFPE)';
+        const fixedLines = [...lines];
+        
+        // Generate clean non-zero guard check
+        const indent = line.match(/^\s*/)[0];
+        const fixedGuard = `${indent}if (${divisor} != 0) {\n${line}\n${indent}} else {\n${indent}    cout << "Error: Division by zero!" << endl;\n${indent}}`;
+        fixedLines[i] = fixedGuard;
+
+        return {
+          hasError: true,
+          lineNumber: i + 1,
+          errorType: errorTypeName,
+          message: 'integer division by zero',
+          explanation: `Line ${i + 1} attempts division by zero (\`${line.trim()}\` where \`${divisor}\` evaluates to 0). Dividing any integer by zero is undefined in computer architecture and triggers a fatal runtime Floating Point Exception (SIGFPE).`,
+          fixedCode: fixedLines.join('\n'),
+          fixExplanation: `Added non-zero guard check \`if (${divisor} != 0)\` on line ${i + 1} to safely handle division by zero without crashing execution.`,
+          topics: extractTopicsFromCode(code, language),
+          alternateSolution: generateAlternateSolution(code, language),
+          complexity: estimateComplexity(code),
+          executionSteps: generateExecutionSteps(code)
+        };
+      }
+    }
+  }
+
+  // Rule 5: Python Specific Checks
   if (language === 'python') {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
